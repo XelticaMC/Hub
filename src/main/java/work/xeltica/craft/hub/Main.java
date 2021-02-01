@@ -3,6 +3,7 @@ package work.xeltica.craft.hub;
 import java.io.File;
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.UUID;
 import java.util.logging.Logger;
@@ -22,12 +23,17 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.Action;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.entity.EntityDamageEvent.DamageCause;
+import org.bukkit.event.player.PlayerInteractAtEntityEvent;
+import org.bukkit.event.player.PlayerInteractEntityEvent;
+import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerPortalEvent;
 import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.metadata.FixedMetadataValue;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import net.md_5.bungee.api.ChatColor;
@@ -67,12 +73,18 @@ public class Main extends JavaPlugin implements Listener {
                 player.sendMessage("hub が未生成");
                 return true;
             }
-            var world = server.getWorld(worldUuid);
-            var loc = world.getSpawnLocation();
-            writePlayerConfig(player);
-            player.getInventory().clear();
-            player.setGameMode(GameMode.ADVENTURE);
-            player.teleport(loc, TeleportCause.PLUGIN);
+            server.getScheduler().runTaskLater(this, new Runnable(){
+                @Override
+                public void run() {
+                    var world = server.getWorld(worldUuid);
+                    var loc = world.getSpawnLocation();
+                    writePlayerConfig(player);
+                    player.getInventory().clear();
+                    player.setGameMode(GameMode.ADVENTURE);
+                    player.teleport(loc, TeleportCause.PLUGIN);
+                }
+            }, 20 * 5);
+            player.sendMessage("5秒後にロビーに移動します...");
             return true;
         }
 
@@ -108,7 +120,6 @@ public class Main extends JavaPlugin implements Listener {
             updateWorld(world);
             return true;
         }
-
         return false;
     }
 
@@ -194,6 +205,20 @@ public class Main extends JavaPlugin implements Listener {
             player.setGameMode(gamemode);
             var loc = (Location)locationResult;
             player.teleport(loc, TeleportCause.PLUGIN);
+        }
+    }
+
+    @EventHandler
+    public void onPlayerInteractEntity(PlayerInteractEntityEvent e) {
+        if (worldUuid == null)
+            return;
+        var player = e.getPlayer();
+        if (player.getWorld().getUID().equals(worldUuid)) {
+            var clicked = e.getRightClicked();
+            if (clicked.getCustomName().equals("職員")) {
+                player.performCommand("jobs browse");
+                e.setCancelled(true);
+            }
         }
     }
 
