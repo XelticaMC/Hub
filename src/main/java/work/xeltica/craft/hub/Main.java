@@ -2,6 +2,7 @@ package work.xeltica.craft.hub;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -18,6 +19,7 @@ import org.bukkit.WorldType;
 import org.bukkit.World.Environment;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
+import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
@@ -30,13 +32,19 @@ import org.bukkit.event.entity.EntityDamageEvent.DamageCause;
 import org.bukkit.event.player.PlayerInteractAtEntityEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerPortalEvent;
 import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.meta.BookMeta;
 import org.bukkit.metadata.FixedMetadataValue;
 import org.bukkit.plugin.java.JavaPlugin;
 
 import net.md_5.bungee.api.ChatColor;
+import net.md_5.bungee.api.chat.ClickEvent;
+import net.md_5.bungee.api.chat.ComponentBuilder;
+import net.md_5.bungee.api.chat.TextComponent;
+import net.md_5.bungee.chat.TextComponentSerializer;
 import work.xeltica.craft.hub.EmptyChunkGenerator;
 
 public class Main extends JavaPlugin implements Listener {
@@ -47,9 +55,14 @@ public class Main extends JavaPlugin implements Listener {
         logger = getLogger();
         getServer().getPluginManager().registerEvents(this, this);
         var world = getServer().getWorld("hub");
-        if (world != null) {
-            worldUuid = world.getUID();
+        if (world == null) {
+            logger.info("Loading world...");
+            world = new WorldCreator("hub").environment(Environment.NORMAL).generator(new EmptyChunkGenerator())
+                    .createWorld();
+            updateWorld(world);
         }
+        worldUuid = world.getUID();
+        logger.info("world name: " + world.getName() + "; world uuid: " + worldUuid + ";");
         players = YamlConfiguration.loadConfiguration(playersFile);
     }
 
@@ -60,17 +73,21 @@ public class Main extends JavaPlugin implements Listener {
 
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
-        if (!(sender instanceof Player)) {
-            sender.sendMessage("Player が実行してください");
-            return true;
-        }
-        var player = (Player) sender;
-        var isAdmin = player.hasPermission("hub.admin") || player.isOp();
+        var isAdmin = sender.hasPermission("hub.admin") || sender.isOp();
         var server = getServer();
 
         if (args.length == 0) {
+            if (!(sender instanceof Player)) {
+                sender.sendMessage("Player が実行してください");
+                return true;
+            }
+            var player = (Player) sender;
             if (worldUuid == null) {
                 player.sendMessage("hub が未生成");
+                return true;
+            }
+            if (player.getWorld().getUID().equals(worldUuid)) {
+                player.sendMessage("既にロビーです！");
                 return true;
             }
             server.getScheduler().runTaskLater(this, new Runnable(){
@@ -79,6 +96,7 @@ public class Main extends JavaPlugin implements Listener {
                     var world = server.getWorld(worldUuid);
                     var loc = world.getSpawnLocation();
                     writePlayerConfig(player);
+                    players = YamlConfiguration.loadConfiguration(playersFile);
                     player.getInventory().clear();
                     player.setGameMode(GameMode.ADVENTURE);
                     player.teleport(loc, TeleportCause.PLUGIN);
@@ -89,7 +107,7 @@ public class Main extends JavaPlugin implements Listener {
         }
 
         if (!isAdmin) {
-            player.sendMessage("/hub");
+            sender.sendMessage("/hub");
             return true;
         }
         if (args[0].equalsIgnoreCase("create")) {
@@ -97,14 +115,14 @@ public class Main extends JavaPlugin implements Listener {
                     .createWorld();
             updateWorld(world);
             world.getBlockAt(0, 60, 0).setType(Material.BIRCH_LOG);
-            player.sendMessage("Generated!");
+            sender.sendMessage("Generated!");
             return true;
         } else if (args[0].equalsIgnoreCase("help")) {
-            player.sendMessage("/hub [create/help/main/delete/unload/update]");
+            sender.sendMessage("/hub [create/help/main/delete/unload/update/reloadplayers/forceall]");
             return true;
         } else if (args[0].equalsIgnoreCase("unload")) {
             if (worldUuid == null) {
-                player.sendMessage("hub が未生成");
+                sender.sendMessage("hub が未生成");
                 return true;
             }
             var world = server.getWorld(worldUuid);
@@ -113,11 +131,18 @@ public class Main extends JavaPlugin implements Listener {
             return true;
         } else if (args[0].equalsIgnoreCase("update")) {
             if (worldUuid == null) {
-                player.sendMessage("hub が未生成");
+                sender.sendMessage("hub が未生成");
                 return true;
             }
             var world = server.getWorld(worldUuid);
             updateWorld(world);
+            return true;
+        } else if (args[0].equalsIgnoreCase("reloadplayers")) {
+            players = YamlConfiguration.loadConfiguration(playersFile);
+            return true;
+        } else if (args[0].equalsIgnoreCase("forceall")) {
+            forceAll = !forceAll;
+            sender.sendMessage("forceAll を" + forceAll + "にしました");
             return true;
         }
         return false;
@@ -135,9 +160,9 @@ public class Main extends JavaPlugin implements Listener {
         
         section.set("location", player.getLocation());
         section.set("items", items);
-        section.set("gamemode", player.getGameMode());
 
         try {
+            logger.info(players.toString());
             players.save(playersFile);
         } catch (IOException e) {
             e.printStackTrace();
@@ -168,6 +193,22 @@ public class Main extends JavaPlugin implements Listener {
     }
 
     @EventHandler
+    public void onPlayerJoin(PlayerJoinEvent e) {
+        var player = e.getPlayer();
+        if (forceAll) {
+            var world = getServer().getWorld("world");
+            player.teleport(world.getSpawnLocation());
+        }
+        if (!player.hasPlayedBefore() && worldUuid != null) {
+            var world = getServer().getWorld(worldUuid);
+            var loc = world.getSpawnLocation();
+            player.getInventory().clear();
+            player.setGameMode(GameMode.ADVENTURE);
+            player.teleport(loc, TeleportCause.PLUGIN);
+        }
+    }
+
+    @EventHandler
     public void onPlayerPortal(PlayerPortalEvent e) {
         if (worldUuid == null)
             return;
@@ -176,21 +217,23 @@ public class Main extends JavaPlugin implements Listener {
             e.setCancelled(true);
             var inv = player.getInventory();
             inv.clear();
-            
+            player.setGameMode(GameMode.SURVIVAL);
+
             var world = getServer().getWorld("world");
-            var section = players.getConfigurationSection(player.getUniqueId().toString());
+            ConfigurationSection section = players.getConfigurationSection(player.getUniqueId().toString());
             if (section == null) {
+                // はじめましての場合
                 player.teleport(world.getSpawnLocation(), TeleportCause.PLUGIN);
-                player.sendMessage(ChatColor.RED + "最後にいた場所が記録されていないため、初期スポーンにワープします。これはおそらくバグなので、管理者に報告してください。 Code: 1");
                 return;
             }
+            logger.info(String.join(",", section.getKeys(false)));
             var itemsResult = section.get("items");
-            if (itemsResult == null || !(itemsResult instanceof ItemStack[])) {
+            if (itemsResult == null) {
                 player.sendMessage(ChatColor.RED + "インベントリ復元失敗。これはおそらくバグなので、管理者に報告してください。 Code: 1");
             } else {
-                var items = (ItemStack[])itemsResult;
-                for (var i = 0; i < items.length; i++) {
-                    inv.setItem(i, items[i]);
+                var items = (ArrayList<ItemStack>)itemsResult;
+                for (var i = 0; i < items.size(); i++) {
+                    inv.setItem(i, items.get(i));
                 }
             }
 
@@ -200,9 +243,7 @@ public class Main extends JavaPlugin implements Listener {
                 player.sendMessage(ChatColor.RED + "最後にいた場所が記録されていないため、初期スポーンにワープします。これはおそらくバグなので、管理者に報告してください。 Code: 2");
                 return;
             }
-            var gamemode = (GameMode)section.get("gamemode", GameMode.SURVIVAL);
 
-            player.setGameMode(gamemode);
             var loc = (Location)locationResult;
             player.teleport(loc, TeleportCause.PLUGIN);
         }
@@ -226,4 +267,5 @@ public class Main extends JavaPlugin implements Listener {
     private File playersFile;
     private YamlConfiguration players;
     private UUID worldUuid;
+    private boolean forceAll;
 }
