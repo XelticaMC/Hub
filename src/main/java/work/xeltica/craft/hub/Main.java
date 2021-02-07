@@ -9,6 +9,7 @@ import java.util.Iterator;
 import java.util.UUID;
 import java.util.logging.Logger;
 
+import org.bukkit.Difficulty;
 import org.bukkit.GameMode;
 import org.bukkit.GameRule;
 import org.bukkit.Location;
@@ -175,6 +176,7 @@ public class Main extends JavaPlugin implements Listener {
         world.setGameRule(GameRule.DO_MOB_SPAWNING, false);
         world.setGameRule(GameRule.DO_WEATHER_CYCLE, false);
         world.setGameRule(GameRule.MOB_GRIEFING, false);
+        world.setDifficulty(Difficulty.PEACEFUL);
     }
 
     @EventHandler
