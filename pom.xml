@@ -6,7 +6,7 @@
 
   <groupId>work.xeltica.craft.hub</groupId>
   <artifactId>Hub</artifactId>
-  <version>1.1</version>
+  <version>1.2.0</version>
 
   <name>Hub</name>
 
@@ -18,8 +18,8 @@
 
   <repositories>
     <repository>
-      <id>spigot-repo</id>
-      <url>https://hub.spigotmc.org/nexus/content/groups/public</url>
+      <id>papermc</id>
+      <url>https://papermc.io/repo/repository/maven-public/</url>
     </repository>
 
     <repository>
@@ -31,10 +31,10 @@
 
   <dependencies>
     <dependency>
-        <groupId>org.spigotmc</groupId>
-        <artifactId>spigot-api</artifactId>
-        <version>1.16.5-R0.1-SNAPSHOT</version>
-        <scope>provided</scope>
+      <groupId>com.destroystokyo.paper</groupId>
+      <artifactId>paper-api</artifactId>
+      <version>1.16.5-R0.1-SNAPSHOT</version>
+      <scope>provided</scope>
     </dependency>
   </dependencies>
   <build>

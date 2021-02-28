@@ -14,8 +14,10 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.Sound;
 import org.bukkit.SoundCategory;
+import org.bukkit.Tag;
 import org.bukkit.World;
 import org.bukkit.World.Environment;
+import org.bukkit.attribute.Attribute;
 import org.bukkit.WorldCreator;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
@@ -26,13 +28,17 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
+import org.bukkit.event.block.BlockPlaceEvent;
+import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
 import org.bukkit.event.entity.EntityDamageEvent.DamageCause;
+import org.bukkit.event.player.PlayerAdvancementDoneEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerPortalEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
+import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.event.player.PlayerTeleportEvent.TeleportCause;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -87,23 +93,39 @@ public class Main extends JavaPlugin implements Listener {
                 player.sendMessage("既にロビーです！");
                 return true;
             }
+            var worldName = player.getWorld().getName();
+            var isSandbox = worldName.equals("sandbox");
             server.getScheduler().runTaskLater(this, new Runnable(){
                 @Override
                 public void run() {
                     var world = server.getWorld(worldUuid);
                     var loc = world.getSpawnLocation();
-                    var savePosition =
-                        !player.getWorld().getName().equalsIgnoreCase("nightmare");
-                    writePlayerConfig(player, savePosition);
-                    players = YamlConfiguration.loadConfiguration(playersFile);
+                    var savePosition = !worldName.equalsIgnoreCase("nightmare");
+                    // 砂場から行く場合は記録しない & ポーション効果を潰す
+                    if (!isSandbox) {
+                        writePlayerConfig(player, savePosition);
+                        players = YamlConfiguration.loadConfiguration(playersFile);
+                        // ポーション効果削除
+                        player.getActivePotionEffects().stream().forEach(e -> player.removePotionEffect(e.getType()));
+                    }
                     player.getInventory().clear();
+                    player.setHealth(player.getAttribute(Attribute.GENERIC_MAX_HEALTH).getValue());
+                    player.setFoodLevel(20);
+                    player.setSaturation(0);
+                    player.setExhaustion(0);
+                    player.setLevel(0);
+                    player.setExp(0);
+                    player.setFireTicks(0);
+
                     player.setGameMode(GameMode.ADVENTURE);
                     player.teleport(loc, TeleportCause.PLUGIN);
                     isWarpingMap.put(player.getUniqueId(), false);
                 }
-            }, 20 * 5);
-            player.sendMessage("5秒後にロビーに移動します...");
-            isWarpingMap.put(player.getUniqueId(), true);
+            }, isSandbox ? 1 : 20 * 5);
+            if (!isSandbox) {
+                player.sendMessage("5秒後にロビーに移動します...");
+                isWarpingMap.put(player.getUniqueId(), true);
+            }
             return true;
         }
 
@@ -161,28 +183,38 @@ public class Main extends JavaPlugin implements Listener {
         }
         return false;
     }
-
     private void writePlayerConfig(Player player, boolean savesLocation) {
+        writePlayerConfig(player, savesLocation, true);
+    }
+
+    private void writePlayerConfig(Player player, boolean savesLocation, boolean savesParams) {
         var uid = player.getUniqueId().toString();
-
         var section = players.getConfigurationSection(uid);
-
         if (section == null) {
-            players.createSection(uid);
+            section = players.createSection(uid);
         }
 
-        var inv = player.getInventory();
-        var items = new ItemStack[inv.getSize()];
-
-        for (var i = 0; i < items.length; i++) {
-            items[i] = inv.getItem(i);
-        }
-        
+        // 座標を記録
         if (savesLocation) {
             section.set("location", player.getLocation());
         }
 
+        // インベントリを記録
+        var inv = player.getInventory();
+        var items = new ItemStack[inv.getSize()];
+        for (var i = 0; i < items.length; i++) {
+            items[i] = inv.getItem(i);
+        }
         section.set("items", items);
+
+        // 体力、満腹度、レベル、炎状態を記録
+        section.set("health", savesParams ? player.getHealth() : null);
+        section.set("foodLevel", savesParams ? player.getFoodLevel() : null);
+        section.set("saturaton", savesParams ? player.getSaturation() : null);
+        section.set("exhaustion", savesParams ? player.getExhaustion() : null);
+        section.set("exp", savesParams ? player.getExp() : null);
+        section.set("level", savesParams ? player.getLevel() : null);
+        section.set("fire", savesParams ? player.getFireTicks() : null);
 
         try {
             logger.info(players.toString());
@@ -233,6 +265,55 @@ public class Main extends JavaPlugin implements Listener {
     }
 
     @EventHandler
+    public void onSignChange(SignChangeEvent e) {
+        var p = e.getPlayer();
+        var inHub = p.getWorld().getUID().equals(worldUuid);
+        if (inHub) {
+            var lines = e.getLines();
+
+            if (lines[0].equals("[Hub]")) {
+                if (lines[1].equalsIgnoreCase("sandbox")) {
+                    getConfig().set("sandboxSignLocation", e.getBlock().getLocation());
+                    saveConfig();
+                    e.setLine(0, "[§a§lテレポート§r]");
+                    e.setLine(1, "");
+                    e.setLine(2, "§bサンドボックス");
+                    e.setLine(3, "");
+                    p.playSound(p.getLocation(), Sound.BLOCK_ANVIL_PLACE, SoundCategory.BLOCKS, 1, 1);
+                }
+            }
+        }
+    }
+
+    @EventHandler
+    public void onAdvancementDone(PlayerAdvancementDoneEvent e) {
+        var p = e.getPlayer();
+        if (p.getWorld().getName().equals("sandbox")) {
+            var advancement = e.getAdvancement();
+
+            for (var criteria : advancement.getCriteria()) {
+                p.getAdvancementProgress(advancement).revokeCriteria(criteria);
+            }
+        }
+    }
+
+    @EventHandler
+    public void onBlockPlace(BlockPlaceEvent e) {
+        var p = e.getPlayer();
+        if (p.getWorld().getName().equals("sandbox")) {
+            var block = e.getBlock().getType();
+            // ベッドはダメ
+            if (Tag.BEDS.isTagged(block)) {
+                e.setCancelled(true);
+            }
+            // エンダーチェストはダメ
+            if (block == Material.ENDER_CHEST) {
+                e.setCancelled(true);
+            }
+        }
+    }
+
+    @EventHandler
     public void onPlayerPortal(PlayerPortalEvent e) {
         if (worldUuid == null)
             return;
@@ -250,6 +331,7 @@ public class Main extends JavaPlugin implements Listener {
             }
 
             restoreInventory(player);
+            restoreParams(player);
 
             var locationResult = section.get("location");
             if (locationResult == null || !(locationResult instanceof Location)) {
@@ -262,6 +344,11 @@ public class Main extends JavaPlugin implements Listener {
             player.teleport(loc, TeleportCause.PLUGIN);
         }
     }
+
+    // @EventHandler
+    // public void onBlockPlace(BlockPlaceEvent e) {
+    //     e.setBuild(false);
+    // }
 
     @EventHandler
     public void onPlayerInteractEntity(PlayerInteractEntityEvent e) {
@@ -283,15 +370,80 @@ public class Main extends JavaPlugin implements Listener {
         var w = p.getWorld();
         if (e.getAction() != Action.RIGHT_CLICK_BLOCK) return;
         if (w.getUID().equals(worldUuid)) {
-            // 呪いのベッド
-            var bedLoc = e.getClickedBlock().getLocation();
-            var loc = getConfig().getLocation("nightmareBedLocation");
-            if (loc == null) return;
-            if (
-                bedLoc.getBlockX() != loc.getBlockX() ||
-                bedLoc.getBlockY() != loc.getBlockY() ||
-                bedLoc.getBlockZ() != loc.getBlockZ()
-            ) return;
+            processNightmareBed(e, p);
+            processSandboxSign(e, p);
+        }
+    }
+
+    @EventHandler
+    public void onPlayerRespawn(PlayerRespawnEvent e) {
+        if (e.getPlayer().getWorld().getName().equalsIgnoreCase("nightmare")) {
+            // 悪夢から目覚める
+            writePlayerConfig(e.getPlayer(), false, false);
+            players = YamlConfiguration.loadConfiguration(playersFile);
+            var lobby = getServer().getWorld(worldUuid).getSpawnLocation();
+            e.setRespawnLocation(lobby);
+        }
+    }
+
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onPlayerTeleport(PlayerTeleportEvent e) {
+        var player = e.getPlayer();
+        var from = e.getFrom().getWorld();
+        var to = e.getTo().getWorld();
+        if (from.getName().equals(to.getName())) return;
+        var fromName = getWorldDisplayName(from);
+        var toName = getWorldDisplayName(to);
+
+        // fromにいる人宛に「toに行く旨」を伝える
+        if (toName != null) {
+            for (Player p : from.getPlayers()) {
+                if (p.getUniqueId().equals(player.getUniqueId())) continue;
+                p.sendMessage(String.format("§a%s§bが§e%s§bに行きました", player.getDisplayName(), toName));
+            }
+        }
+
+        // toにいる人宛に「fromから来た旨」を伝える
+        if (fromName != null) {
+            for (Player p : to.getPlayers()) {
+                if (p.getUniqueId().equals(player.getUniqueId()))
+                    continue;
+                p.sendMessage(String.format("§a%s§bが§e%s§bから来ました", player.getDisplayName(), fromName));
+            }
+        }
+    }
+
+    private String getWorldDisplayName(World w) {
+        if (w.getName().equals("world")) return "メインワールド";
+        else if (w.getName().equals("world_nether")) return "ネザー";
+        else if (w.getName().equals("world_the_end")) return "ジ・エンド";
+        else if (w.getName().equals("hub")) return "ロビー";
+        else if (w.getName().equals("sandbox")) return "サンドボックス";
+        else if (w.getName().equals("nightmare")) return "ナイトメア";
+        else if (w.getName().startsWith("travel_")) return null;
+        else return "なぞのばしょ";
+    }
+    
+    private void processSandboxSign(PlayerInteractEvent e, Player p) {
+        var signLoc = e.getClickedBlock().getLocation();
+        var loc = getConfig().getLocation("sandboxSignLocation");
+        if (loc != null && signLoc.getBlockX() == loc.getBlockX() && signLoc.getBlockY() == loc.getBlockY() && signLoc.getBlockZ() == loc.getBlockZ()) {
+            e.setCancelled(true);
+            var sandbox = getServer().getWorld("sandbox");
+            p.setGameMode(GameMode.CREATIVE);
+            p.teleport(sandbox.getSpawnLocation());
+            p.sendMessage("ここは、" + ChatColor.AQUA + "クリエイティブモード" + ChatColor.RESET + "で好きなだけ遊べる" + ChatColor.RED + "サンドボックスワールド" + ChatColor.RESET + "。");
+            p.sendMessage("元の世界の道具や経験値はお預かりしているので、好きなだけあそんでね！");
+            p.sendMessage(ChatColor.GRAY + "(あ、でも他の人の建築物を壊したりしないでね)");
+            p.sendMessage("帰るときは、" + ChatColor.GREEN + "/hub " + ChatColor.RESET + "コマンドを実行してください。");
+        }
+    }
+
+    private void processNightmareBed(PlayerInteractEvent e, Player p) {
+        var bedLoc = e.getClickedBlock().getLocation();
+        var loc = getConfig().getLocation("nightmareBedLocation");
+        if (loc != null && bedLoc.getBlockX() == loc.getBlockX() && bedLoc.getBlockY() == loc.getBlockY() && bedLoc.getBlockZ() == loc.getBlockZ()) {
             e.setCancelled(true);
             var nightmare = getServer().getWorld("nightmare");
             nightmare.setDifficulty(Difficulty.HARD);
@@ -299,8 +451,13 @@ public class Main extends JavaPlugin implements Listener {
             nightmare.setGameRule(GameRule.DO_WEATHER_CYCLE, false);
             nightmare.setGameRule(GameRule.MOB_GRIEFING, false);
             nightmare.setTime(18000);
+            nightmare.setStorm(true);
+            nightmare.setWeatherDuration(20000);
+            nightmare.setThundering(true);
+            nightmare.setThunderDuration(20000);
 
             restoreInventory(p);
+            restoreParams(p);
             p.teleport(nightmare.getSpawnLocation());
             p.playSound(p.getLocation(), Sound.BLOCK_END_PORTAL_SPAWN, SoundCategory.PLAYERS, 1, 0.5f);
             p.sendMessage("ここは怖い敵がうじゃうじゃいる" + ChatColor.RED + "ナイトメアワールド" + ChatColor.RESET + "。");
@@ -309,19 +466,10 @@ public class Main extends JavaPlugin implements Listener {
         }
     }
 
-    @EventHandler
-    public void onPlayerRespawn(PlayerRespawnEvent e) {
-        if (e.getPlayer().getWorld().getName().equalsIgnoreCase("nightmare")) {
-            // 悪夢から目覚める
-            writePlayerConfig(e.getPlayer(), false);
-            players = YamlConfiguration.loadConfiguration(playersFile);
-            var lobby = getServer().getWorld(worldUuid).getSpawnLocation();
-            e.setRespawnLocation(lobby);
-        }
-    }
-
     private void restoreInventory(Player player) {
         ConfigurationSection section = players.getConfigurationSection(player.getUniqueId().toString());
+        if (section == null) return;
+
         var inv = player.getInventory();
         inv.clear();
         var itemsResult = section.get("items");
@@ -333,6 +481,20 @@ public class Main extends JavaPlugin implements Listener {
                 inv.setItem(i, items.get(i));
             }
         }
+    }
+
+    private void restoreParams(Player player) {
+        ConfigurationSection section = players.getConfigurationSection(player.getUniqueId().toString());
+        if (section == null) return;
+
+        player.setHealth(section.getDouble("health", player.getAttribute(Attribute.GENERIC_MAX_HEALTH).getValue()));
+        // TODO: 満腹度上限の決め打ちをしなくて済むならそうしたい
+        player.setFoodLevel(section.getInt("foodLevel", 20));
+        player.setSaturation((float)section.getDouble("saturaton", 0));
+        player.setExhaustion((float)section.getDouble("exhaustion", 0));
+        player.setExp((float)section.getDouble("exp", 0));
+        player.setLevel(section.getInt("level", 0));
+        player.setFireTicks(section.getInt("fire", 0));
     }
 
     private Logger logger;
