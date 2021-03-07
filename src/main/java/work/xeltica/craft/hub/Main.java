@@ -30,9 +30,11 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
+import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
+import org.bukkit.event.entity.FoodLevelChangeEvent;
 import org.bukkit.event.entity.EntityDamageEvent.DamageCause;
 import org.bukkit.event.player.PlayerAdvancementDoneEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
@@ -63,6 +65,15 @@ public class Main extends JavaPlugin implements Listener {
             updateWorld(world);
         }
         worldUuid = world.getUID();
+        world.getPlayers().stream().forEach(player -> {
+            player.setHealth(player.getAttribute(Attribute.GENERIC_MAX_HEALTH).getValue());
+            player.setFoodLevel(20);
+            player.setSaturation(0);
+            player.setExhaustion(0);
+            player.setLevel(0);
+            player.setExp(0);
+            player.setFireTicks(0);
+        });
         logger.info("world name: " + world.getName() + "; world uuid: " + worldUuid + ";");
         players = YamlConfiguration.loadConfiguration(playersFile);
         loadSignsFile();
@@ -327,13 +338,29 @@ public class Main extends JavaPlugin implements Listener {
         var p = e.getPlayer();
         if (p.getWorld().getName().equals("sandbox")) {
             var block = e.getBlock().getType();
-            // ベッドはダメ
-            if (Tag.BEDS.isTagged(block)) {
-                e.setCancelled(true);
-            }
             // エンダーチェストはダメ
             if (block == Material.ENDER_CHEST) {
                 e.setCancelled(true);
+            }
+        }
+    }
+
+    @EventHandler
+    public void onBlockBreak(BlockBreakEvent e) {
+        var p = e.getPlayer();
+        var inHub = p.getWorld().getUID().equals(worldUuid);
+        if (inHub) {
+            var sign = getSignDataOf(e.getBlock().getLocation());
+            if (sign != null) {
+                signData.remove(sign);
+                try {
+                    saveSignsFile();
+                    p.sendMessage("看板を撤去しました。");
+                } catch (IOException e1) {
+                    p.sendMessage("§b看板の撤去に失敗しました。");
+                    e1.printStackTrace();
+                }
+                
             }
         }
     }
@@ -346,6 +373,16 @@ public class Main extends JavaPlugin implements Listener {
         if (player.getWorld().getUID().equals(worldUuid)) {
             e.setCancelled(true);
             returnToWorld(player);
+        }
+    }
+
+    @EventHandler
+    public void onPlayerHunger(FoodLevelChangeEvent e) {
+        if (worldUuid == null)
+            return;
+        var player = e.getEntity();
+        if (player.getWorld().getUID().equals(worldUuid)) {
+            e.setCancelled(true);
         }
     }
 
